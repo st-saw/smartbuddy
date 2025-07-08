@@ -37,7 +37,7 @@ def format_result(analysis: Analysis) -> str:
     """
     short_address = shorten_address(analysis.wallet_address)
     return (
-        f"Результат анализа по кошельку {short_address} ({analysis.nickname}):\n\n"
+        f"Результат AI-анализа по кошельку {short_address} ({analysis.nickname}):\n\n"
         f"{analysis.result}\n\n"
         f"Дата анализа: {analysis.created_at.strftime('%d.%m.%Y %H:%M')}"
     )
@@ -48,7 +48,7 @@ def select_history(message: Message) -> Iterator[Analysis]:
     Получает список анализов пользователя по введённому адресу или никнейму.
 
     Args:
-        message (telebot.types.Message): Сообщение Telegram с текстом-запросом.
+        message (Message): Сообщение Telegram с текстом-запросом.
 
     Returns:
         Iterator[Analysis]: Итератор по объектам Analysis пользователя,

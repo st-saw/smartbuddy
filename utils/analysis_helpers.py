@@ -1,11 +1,11 @@
 import re
 
 from telebot.types import Message
-from api.helius.get_transactions import get_transactions
 from config_data.bot_instance import bot
 from database.common.models import User, Analysis
 from handlers.default_handlers import search_analysis, stop
 from states.state import waiting_for_address, pending_address
+from utils.ai_helpers import analyze_wallet_with_ai
 from utils.bot_helpers import format_result
 from utils.wait_timer import cancel_timer
 from utils.misc.constants import END_TEXT
@@ -20,7 +20,7 @@ def process_analyze_query(message: Message) -> None:
     3. Если всё хорошо, запрашивает никнейм для этого кошелька.
 
     Args:
-        message (telebot.types.Message): Объект сообщения Telegram от пользователя.
+        message (Message): Объект сообщения Telegram от пользователя.
     """
     user_id = message.from_user.id
     user = User.get(telegram_id=user_id)
@@ -70,7 +70,7 @@ def process_nickname(message: Message) -> None:
     4. Отправляет результат пользователю.
 
     Args:
-        message (telebot.types.Message): Объект сообщения Telegram от пользователя.
+        message (Message): Объект сообщения Telegram от пользователя.
     """
     user_id = message.from_user.id
     user = User.get(telegram_id=user_id)
@@ -92,15 +92,14 @@ def process_nickname(message: Message) -> None:
             )
 
         else:
-            # Получаем список транзакций по кошельку
-            wallet_info_list = list(get_transactions(pending_address[user_id]))
-            wallet_info_text = "\n\n".join(wallet_info_list)
+            # Получаем AI-анализ по кошельку
+            wallet_analyze_info = analyze_wallet_with_ai(pending_address[user_id])
             # Сохраняем результат анализа
             analysis = Analysis.create(
                 user=user,
                 wallet_address=pending_address[user_id],
                 nickname=query,
-                result=wallet_info_text,
+                result=wallet_analyze_info,
             )
             # Отправляем результат пользователю
             bot.send_message(

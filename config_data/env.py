@@ -6,3 +6,4 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY")
+HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN")

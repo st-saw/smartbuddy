@@ -1,91 +1,106 @@
 import requests
-import json
-import re
-from datetime import datetime, timezone
+from datetime import datetime
+from collections import Counter
+from typing import List
 
 from config_data.env import HELIUS_API_KEY
-from utils.bot_helpers import shorten_address
-from typing import Iterator, Optional
 
 
-def replace_address_in_description(description: str) -> str:
+def get_transactions(address: str) -> List[dict]:
     """
-    Заменяет полный адрес кошелька на сокращённый вид в начале описания транзакции.
-
-    Args:
-        description (str): Описание транзакции, содержащее полный адрес.
-
-    Returns:
-        str: Описание с сокращённым адресом (если найден), иначе исходное описание.
-    """
-    match = re.match(r"([1-9A-HJ-NP-Za-km-z]{32,44})", description)
-    if match:
-        addr = match.group(1)
-        short = shorten_address(addr)
-        return description.replace(addr, short, 1)
-    return description
-
-
-def extract_sol_amount(description: str) -> Optional[float]:
-    """
-    Извлекает сумму SOL из описания транзакции.
-
-    Args:
-        description (str): Описание транзакции.
-
-    Returns:
-        Optional[float]: Сумма в SOL, если найдена, иначе None.
-    """
-    match = re.search(r"(\d+\.?\d*) SOL", description)
-    if match:
-        return float(match.group(1))
-    return None
-
-
-def get_transactions(address: str) -> Iterator[str]:
-    """
-    Получает и форматирует историю транзакций для указанного Solana-кошелька.
+    Получает последние транзакции Solana-кошелька через Helius API.
 
     Args:
         address (str): Адрес Solana-кошелька.
 
-    Yields:
-        str: Отформатированный отчёт по каждой транзакции (HTML-разметка для Telegram).
+    Returns:
+        list[dict]: Список транзакций в формате, возвращаемом Helius API.
     """
     url = f"https://api.helius.xyz/v0/addresses/{address}/transactions"
     # в limit указывается количество транзакций для анализа (максимум 100)
-    querystring = {"api-key": HELIUS_API_KEY, "limit": "2"}
+    querystring = {"api-key": HELIUS_API_KEY, "limit": "100"}
+    response = requests.request("GET", url, params=querystring)
 
-    response = json.loads(requests.request("GET", url, params=querystring).text)
+    return response.json()
+
+
+def parse_transactions(response: List[dict]) -> dict:
+    """
+    Строит summary по последним транзакциям: агрегирует топ токены, входящие/исходящие, крупные сделки, комиссии и другую активность.
+
+    Args:
+        response (list[dict]): Список транзакций (response из Helius API).
+
+    Returns:
+        dict: Словарь-резюме для дальнейшего анализа или формирования prompt.
+    """
+    top_tokens = Counter()
+    nft_ops = 0
+    swaps = 0
+    airdrops = 0
+    big_trades = []
+    tx_in = 0
+    tx_out = 0
+    total_sol = 0
+    total_fee = 0
+    tx_list = []
 
     for item in response:
-        dt = datetime.fromtimestamp(item["timestamp"], tz=timezone.utc).strftime(
-            "%Y-%m-%d %H:%M:%S"
+        # 1. Дата
+        dt = datetime.fromtimestamp(item.get("timestamp")).strftime("%Y-%m-%d %H:%M")
+        # 2. Описание
+        desc = item.get("description", "нет описания")
+        # 3. Тип транзакции
+        tx_type = item.get("type", "")
+        # 4. Суммы
+        sol_amount = 0
+        for transfer in item.get("nativeTransfers", []):
+            amt = transfer.get("amount", 0)
+            if amt > 0:
+                tx_in += 1
+            if amt < 0:
+                tx_out += 1
+            sol_amount += (
+                abs(amt) / 1e9
+            )  # Helius выдаёт amount в лампортах (1 SOL = 1e9)
+
+        # 5. Токены
+        for transfer in item.get("tokenTransfers", []):
+            mint = transfer.get("mint", "")
+            if mint:
+                top_tokens[mint] += abs(transfer.get("tokenAmount", 0))
+        # 6. NFT/Swap/Airdrop/Reward
+        if "nft" in item.get("events", {}):
+            nft_ops += 1
+        if "swap" in item.get("events", {}):
+            swaps += 1
+        if "airdrop" in desc.lower() or tx_type == "AIRDROP":
+            airdrops += 1
+        # 7. Крупные сделки
+        if sol_amount > 3:  # Порог для "крупной сделки"
+            big_trades.append(f"{sol_amount:.3f} SOL ({dt})")
+        # 8. Суммарный объём и комиссии
+        total_sol += sol_amount
+        total_fee += item.get("fee", 0) / 1e9
+
+        # 9. Строим текст для LLM
+        tx_list.append(
+            f"{dt}: {desc} | {sol_amount:.4f} SOL, fee {item.get('fee', 0) / 1e9:.7f}"
         )
-        number = extract_sol_amount(item["description"])
-        quantity = len(item["nativeTransfers"])
 
-        receivers_quantity = (
-            f"{quantity} получателей" if quantity > 1 else f"{quantity} получателя"
-        )
+    top_5 = [k for k, v in top_tokens.most_common(5)]
+    summary = {
+        "top_tokens": top_5,
+        "balance": round(total_sol, 4),
+        "tx_in": tx_in,
+        "tx_out": tx_out,
+        "tx_list": tx_list[:5],  # Для prompt берём 5 последних
+        "big_trades": ", ".join(big_trades) or "нет",
+        "airdrops": f"{airdrops} за период" if airdrops else "нет",
+        "nft_ops": nft_ops,
+        "swaps": swaps,
+        "avg_fee": round(total_fee / len(response), 7) if response else 0,
+        "total_ops": len(response),
+    }
 
-        amount = (
-            f"{number:.6f} SOL для {receivers_quantity}" if number is not None else "0"
-        )
-
-        desc = item["description"]
-        desc_short = replace_address_in_description(desc)
-
-        fee_sol = item["fee"] / 1_000_000_000
-
-        tx_link = f'https://solscan.io/tx/{item["signature"]}'
-
-        report = (
-            f"\n🕒 <b>{dt}</b> 🕒\n\n"
-            f"➡️ <b>Количество</b>: {amount}\n"
-            f"📃 <b>Описание</b>: {desc_short}\n"
-            f"💸 <b>Комиссия</b>: {fee_sol:.9f} SOL\n"
-            f'🔗 <b>Подробнее</b>: <a href="{tx_link}">solscan.io</a>'
-        )
-
-        yield report
+    return summary

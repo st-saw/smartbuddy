@@ -24,25 +24,21 @@ def mixtral_hf_analysis(prompt: str, message: Message = None) -> str | None:
             bot.send_message(chat_id, "Ошибка: Hugging Face токен не найден.")
         return None
 
-    url = "https://api-inference.huggingface.co/models/mistralai/Mixtral-8x7B-Instruct-v0.1"
+    url = "https://router.huggingface.co/together/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_token}"}
     payload = {
-        "inputs": prompt,
-        "parameters": {"max_new_tokens": 256, "temperature": 0.7},
+        "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1000,
+        "temperature": 0.7,
     }
 
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=60)
         if response.status_code == 200:
-            output = response.json()
-
-            if isinstance(output, list) and "generated_text" in output[0]:
-                return output[0]["generated_text"]
-
-            if isinstance(output, dict) and "generated_text" in output:
-                return output["generated_text"]
-
-            return str(output)
+            data = response.json()
+            # Новая структура Hugging Face router API
+            return data["choices"][0]["message"]["content"].strip()
 
         elif response.status_code == 429:
             if chat_id:
